@@ -2,7 +2,7 @@ services:
   easy-chatgpt:
     build: .
     ports:
-      - "6663:8000"
+      - "6662:8000"
     env_file:
       - .env
     restart: unless-stopped

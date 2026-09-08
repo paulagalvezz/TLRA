@@ -39,12 +39,13 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open **http://localhost:6663** in your browser.
+Open **http://localhost:6662** in your browser.
 
 Stop with `docker compose down`. Rebuild after code changes with `docker compose up -d --build`.
 
 > Port history: v1 ran on 6661, v2 (streaming) on 6662, v3 (vision) on 6663.
-> Each version kept the previous endpoints, so the current image exposes everything on 6663.
+> v3 now runs on 6662 because v4 (week2/exercise1, assistants) took over 6663.
+> Each version kept the previous endpoints, so the current image exposes everything on 6662.
 
 ## Using the app
 
@@ -72,7 +73,7 @@ Both endpoints take the same JSON body:
 ### `POST /chat` - full response
 
 ```bash
-curl -s http://localhost:6663/chat \
+curl -s http://localhost:6662/chat \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"Say hi"}]}'
 ```
@@ -82,7 +83,7 @@ Returns `{"reply", "payload_sent", "usage"}`.
 ### `POST /chat/stream` - Server-Sent Events
 
 ```bash
-curl -N http://localhost:6663/chat/stream \
+curl -N http://localhost:6662/chat/stream \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"Say hi"}]}'
 ```
@@ -107,7 +108,7 @@ Emits one event per chunk:
 backend/main.py      FastAPI app: static serving, /chat, /chat/stream
 frontend/            Plain HTML/CSS/JS, no build step (marked.js from CDN)
 Dockerfile           python:3.12-slim + uvicorn
-docker-compose.yml   Exposes the app on port 6663
+docker-compose.yml   Exposes the app on port 6662
 .env.example         Template for .env
 ```
 
