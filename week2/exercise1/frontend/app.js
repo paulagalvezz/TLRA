@@ -8,7 +8,6 @@ const DEFAULT_TEMPLATE =
 
 let assistants = [];
 let activeAssistantId = null;
-let editingAssistantId = null;
 
 const form = document.getElementById("chat-form");
 const input = document.getElementById("user-input");
@@ -18,6 +17,28 @@ const chatTitle = document.getElementById("chat-title");
 const contextToggle = document.getElementById("context-toggle");
 const contextPane = document.getElementById("context-pane");
 const contextEntries = document.getElementById("context-entries");
+const settingsToggle = document.getElementById("settings-toggle");
+const settingsPane = document.getElementById("settings-pane");
+const settingsBackdrop = document.getElementById("settings-backdrop");
+const settingsClose = document.getElementById("settings-close");
+const settingsCancel = document.getElementById("settings-cancel");
+const settingsTarget = document.getElementById("settings-target");
+const settingsEmpty = document.getElementById("settings-empty");
+const settingsContent = document.getElementById("settings-content");
+const settingsForm = document.getElementById("settings-form");
+const settingsName = document.getElementById("settings-name");
+const settingsSystem = document.getElementById("settings-system");
+const settingsTemplate = document.getElementById("settings-template");
+const settingsDocument = document.getElementById("settings-document");
+const settingsDocumentField = document.getElementById("settings-document-field");
+const settingsDocumentName = document.getElementById("settings-document-name");
+const settingsFormError = document.getElementById("settings-form-error");
+const settingsSave = document.getElementById("settings-save");
+const currentName = document.getElementById("current-name");
+const currentSystem = document.getElementById("current-system");
+const currentTemplate = document.getElementById("current-template");
+const currentDoc = document.getElementById("current-doc");
+const currentDocPreview = document.getElementById("current-doc-preview");
 const composer = document.querySelector(".composer");
 const attachButton = document.getElementById("attach-button");
 const imageInput = document.getElementById("image-input");
@@ -32,12 +53,30 @@ const assistantName = document.getElementById("assistant-name");
 const assistantSystem = document.getElementById("assistant-system");
 const assistantTemplate = document.getElementById("assistant-template");
 const assistantDocument = document.getElementById("assistant-document");
-const assistantDocInfo = document.getElementById("assistant-doc-info");
 const assistantFormError = document.getElementById("assistant-form-error");
 const assistantCancel = document.getElementById("assistant-cancel");
 
 contextToggle.addEventListener("click", () => {
+    const opening = contextPane.classList.contains("hidden");
     contextPane.classList.toggle("hidden");
+    if (opening) closeSettingsPane();
+});
+
+settingsToggle.addEventListener("click", () => {
+    if (isSettingsOpen()) {
+        closeSettingsPane();
+        return;
+    }
+    openSettingsPane();
+    loadSettingsForActive();
+});
+
+settingsClose.addEventListener("click", closeSettingsPane);
+settingsCancel.addEventListener("click", closeSettingsPane);
+settingsBackdrop.addEventListener("click", closeSettingsPane);
+
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && isSettingsOpen()) closeSettingsPane();
 });
 
 input.addEventListener("keydown", (event) => {
@@ -298,7 +337,7 @@ function renderAssistantsList() {
         edit.textContent = "Edit";
         edit.addEventListener("click", (event) => {
             event.stopPropagation();
-            openEditModal(assistant.id);
+            openSettingsFor(assistant.id);
         });
 
         const remove = document.createElement("button");
@@ -333,6 +372,8 @@ function switchTo(assistantId) {
         ? `Ask about ${assistant.document_name}...`
         : "Type a message... (or drop images)";
 
+    if (isSettingsOpen()) loadSettingsForActive();
+
     renderAssistantsList();
     input.focus();
 }
@@ -353,7 +394,7 @@ async function deleteAssistant(assistant) {
     await loadAssistants();
 }
 
-// --- Assistant create/edit modal ----------------------------------------
+// --- Assistant create modal ---------------------------------------------
 
 newAssistantButton.addEventListener("click", () => openNewModal());
 assistantCancel.addEventListener("click", () => closeModal());
@@ -362,41 +403,12 @@ assistantModal.addEventListener("click", (event) => {
 });
 
 function openNewModal() {
-    editingAssistantId = null;
     assistantFormTitle.textContent = "New assistant";
     assistantName.value = "";
     assistantSystem.value = "";
     assistantTemplate.value = DEFAULT_TEMPLATE;
     assistantDocument.value = "";
     assistantDocument.required = true;
-    assistantDocInfo.classList.add("hidden");
-    clearFormError();
-    assistantModal.classList.remove("hidden");
-    assistantName.focus();
-}
-
-async function openEditModal(assistantId) {
-    let assistant;
-    try {
-        const response = await fetch(`/api/assistants/${assistantId}`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        assistant = await response.json();
-    } catch (error) {
-        appendError(`Could not load assistant: ${error.message}`);
-        return;
-    }
-    editingAssistantId = assistantId;
-    assistantFormTitle.textContent = "Edit assistant";
-    assistantName.value = assistant.name;
-    assistantSystem.value = assistant.system_prompt;
-    assistantTemplate.value = assistant.prompt_template;
-    assistantDocument.value = "";
-    assistantDocument.required = false;
-    assistantDocInfo.textContent =
-        `Current document: ${assistant.document_name} ` +
-        `(${assistant.document_chars.toLocaleString()} chars). ` +
-        "Pick a new file to replace it, or leave empty to keep it.";
-    assistantDocInfo.classList.remove("hidden");
     clearFormError();
     assistantModal.classList.remove("hidden");
     assistantName.focus();
@@ -404,7 +416,6 @@ async function openEditModal(assistantId) {
 
 function closeModal() {
     assistantModal.classList.add("hidden");
-    editingAssistantId = null;
     clearFormError();
 }
 
@@ -427,11 +438,11 @@ assistantForm.addEventListener("submit", async (event) => {
     clearFormError();
 
     const file = assistantDocument.files[0];
-    if (!editingAssistantId && !file) {
+    if (!file) {
         showFormError("Choose a document file.");
         return;
     }
-    if (file && !looksLikeTextFile(file)) {
+    if (!looksLikeTextFile(file)) {
         showFormError(`"${file.name}" is not a plain-text file.`);
         return;
     }
@@ -440,29 +451,185 @@ assistantForm.addEventListener("submit", async (event) => {
     formData.append("name", assistantName.value);
     formData.append("system_prompt", assistantSystem.value);
     formData.append("prompt_template", assistantTemplate.value);
-    if (file) formData.append("document", file);
+    formData.append("document", file);
 
     const saveButton = document.getElementById("assistant-save");
     saveButton.disabled = true;
     try {
-        const response = await fetch(
-            editingAssistantId ? `/api/assistants/${editingAssistantId}` : "/api/assistants",
-            { method: editingAssistantId ? "PUT" : "POST", body: formData },
-        );
+        const response = await fetch("/api/assistants", { method: "POST", body: formData });
         if (!response.ok) {
             const data = await response.json().catch(() => null);
             showFormError(detailFromError(data) || `HTTP ${response.status}`);
             return;
         }
         const saved = await response.json();
-        const keepActive = editingAssistantId === activeAssistantId;
         closeModal();
         await loadAssistants();
-        if (!keepActive) switchTo(saved.id);
+        switchTo(saved.id);
     } catch (error) {
         showFormError(error.message);
     } finally {
         saveButton.disabled = false;
+    }
+});
+
+// --- Assistant settings panel -------------------------------------------
+
+const DOC_PREVIEW_CHARS = 280;
+const NO_FILE_TEXT = "No file selected \u2014 the current document is kept.";
+
+let settingsReturnFocus = null;
+
+function isSettingsOpen() {
+    return settingsPane.classList.contains("is-open");
+}
+
+function openSettingsPane() {
+    contextPane.classList.add("hidden");
+    if (isSettingsOpen()) return;
+    settingsReturnFocus = document.activeElement;
+    settingsPane.classList.add("is-open");
+    settingsBackdrop.classList.add("is-open");
+    settingsClose.focus();
+}
+
+function closeSettingsPane() {
+    if (!isSettingsOpen()) return;
+    settingsPane.classList.remove("is-open");
+    settingsBackdrop.classList.remove("is-open");
+    if (settingsReturnFocus && document.contains(settingsReturnFocus)) {
+        settingsReturnFocus.focus();
+    }
+    settingsReturnFocus = null;
+}
+
+function syncSettingsDocumentName() {
+    const file = settingsDocument.files[0];
+    settingsDocumentName.textContent = file ? file.name : NO_FILE_TEXT;
+    settingsDocumentName.classList.toggle("has-file", Boolean(file));
+}
+
+function resetSettingsDocument() {
+    settingsDocument.value = "";
+    syncSettingsDocumentName();
+}
+
+settingsDocument.addEventListener("change", syncSettingsDocumentName);
+
+function openSettingsFor(assistantId) {
+    if (assistantId !== activeAssistantId) {
+        switchTo(assistantId);   // also refreshes the panel if already open
+    }
+    const wasOpen = isSettingsOpen();
+    openSettingsPane();
+    if (!wasOpen) loadSettingsForActive();
+}
+
+async function loadSettingsForActive() {
+    clearSettingsFormError();
+    resetSettingsDocument();
+
+    if (activeAssistantId === null) {
+        settingsTarget.classList.add("hidden");
+        settingsEmpty.classList.remove("hidden");
+        settingsContent.classList.add("hidden");
+        return;
+    }
+
+    const assistant = assistants.find((candidate) => candidate.id === activeAssistantId);
+    settingsTarget.textContent = assistant ? assistant.name : "";
+    settingsTarget.classList.toggle("hidden", !assistant);
+    settingsEmpty.classList.add("hidden");
+    settingsContent.classList.remove("hidden");
+
+    // Block editing while loading so a late prefill cannot clobber user input.
+    setSettingsFormEnabled(false);
+    let record;
+    try {
+        const response = await fetch(`/api/assistants/${activeAssistantId}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        record = await response.json();
+    } catch (error) {
+        appendError(`Could not load assistant settings: ${error.message}`);
+        settingsEmpty.classList.remove("hidden");
+        settingsContent.classList.add("hidden");
+        setSettingsFormEnabled(true);
+        return;
+    }
+    if (record.id !== activeAssistantId) return;   // selection changed mid-fetch
+
+    renderCurrentSettings(record);
+    settingsName.value = record.name;
+    settingsSystem.value = record.system_prompt;
+    settingsTemplate.value = record.prompt_template;
+    setSettingsFormEnabled(true);
+}
+
+function setSettingsFormEnabled(enabled) {
+    for (const el of [settingsName, settingsSystem, settingsTemplate, settingsDocument, settingsSave]) {
+        el.disabled = !enabled;
+    }
+    settingsDocumentField.classList.toggle("is-disabled", !enabled);
+}
+
+function renderCurrentSettings(record) {
+    currentName.textContent = record.name;
+    currentSystem.textContent = record.system_prompt || "(empty)";
+    currentTemplate.textContent = record.prompt_template;
+    currentDoc.textContent =
+        `${record.document_name} (${record.document_text.length.toLocaleString()} chars)`;
+    const preview = record.document_text.slice(0, DOC_PREVIEW_CHARS);
+    currentDocPreview.textContent =
+        preview + (record.document_text.length > DOC_PREVIEW_CHARS ? "\n[...]" : "");
+}
+
+function showSettingsFormError(text) {
+    settingsFormError.textContent = text;
+    settingsFormError.classList.remove("hidden");
+}
+
+function clearSettingsFormError() {
+    settingsFormError.textContent = "";
+    settingsFormError.classList.add("hidden");
+}
+
+settingsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    clearSettingsFormError();
+    if (activeAssistantId === null) return;
+
+    const file = settingsDocument.files[0];
+    if (file && !looksLikeTextFile(file)) {
+        showSettingsFormError(`"${file.name}" is not a plain-text file.`);
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("name", settingsName.value);
+    formData.append("system_prompt", settingsSystem.value);
+    formData.append("prompt_template", settingsTemplate.value);
+    if (file) formData.append("document", file);
+
+    const assistantId = activeAssistantId;
+    settingsSave.disabled = true;
+    try {
+        const response = await fetch(`/api/assistants/${assistantId}`, {
+            method: "PUT",
+            body: formData,
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => null);
+            showSettingsFormError(detailFromError(data) || `HTTP ${response.status}`);
+            return;
+        }
+        settingsDocument.value = "";
+        syncSettingsDocumentName();
+        await loadAssistants();          // refresh sidebar meta (doc name/chars)
+        await loadSettingsForActive();   // refresh "Current" section + form
+    } catch (error) {
+        showSettingsFormError(error.message);
+    } finally {
+        settingsSave.disabled = false;
     }
 });
 

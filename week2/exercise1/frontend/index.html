@@ -19,7 +19,10 @@
         <main class="chat-pane">
             <header class="chat-header">
                 <h1><span id="chat-title">EASY-CHATGPT</span> <span class="version">v4</span></h1>
-                <button id="context-toggle" type="button">Context view</button>
+                <div class="header-actions">
+                    <button id="settings-toggle" type="button">Configure assistant</button>
+                    <button id="context-toggle" type="button">Context view</button>
+                </div>
             </header>
             <div id="messages" class="messages"></div>
             <div class="composer">
@@ -42,6 +45,79 @@
         </aside>
     </div>
 
+    <div id="settings-backdrop" class="settings-backdrop"></div>
+    <aside id="settings-pane" class="settings-drawer" aria-label="Assistant settings">
+        <div class="settings-header">
+            <div class="settings-heading">
+                <h2>Assistant settings</h2>
+                <span id="settings-target" class="settings-target hidden"></span>
+            </div>
+            <button id="settings-close" class="icon-button" type="button" title="Close" aria-label="Close settings">&times;</button>
+        </div>
+        <div class="settings-body">
+            <p id="settings-empty" class="hint">
+                Select an assistant on the left to view and edit its settings,
+                or create one with <code>+</code>.
+            </p>
+            <div id="settings-content" class="settings-content hidden">
+                <section class="settings-section current" aria-label="Current assistant state">
+                    <h3>Current assistant state <span class="settings-pill">read-only</span></h3>
+                    <div class="field-stack">
+                        <div class="field">
+                            <span class="field-label">Name</span>
+                            <p id="current-name" class="current-value"></p>
+                        </div>
+                        <div class="field">
+                            <span class="field-label">System prompt</span>
+                            <pre id="current-system" class="current-pre"></pre>
+                        </div>
+                        <div class="field">
+                            <span class="field-label">Prompt template</span>
+                            <pre id="current-template" class="current-pre"></pre>
+                        </div>
+                        <div class="field">
+                            <span class="field-label">Document</span>
+                            <p id="current-doc" class="current-value"></p>
+                            <pre id="current-doc-preview" class="current-pre"></pre>
+                        </div>
+                    </div>
+                </section>
+                <form id="settings-form" class="settings-section">
+                    <h3>Edit</h3>
+                    <div class="field-stack">
+                        <div class="field">
+                            <label for="settings-name">Name</label>
+                            <input id="settings-name" type="text" maxlength="200" required autocomplete="off">
+                        </div>
+                        <div class="field">
+                            <label for="settings-system">System prompt</label>
+                            <textarea id="settings-system" rows="5" placeholder="You are a helpful assistant."></textarea>
+                        </div>
+                        <div class="field">
+                            <label for="settings-template">Prompt template</label>
+                            <textarea id="settings-template" rows="6" required></textarea>
+                            <p class="hint">Must contain <code>{context}</code> and <code>{user_input}</code>.</p>
+                        </div>
+                        <div class="field">
+                            <span class="field-label" id="settings-document-label">Replace document (.txt, UTF-8)</span>
+                            <div id="settings-document-field" class="file-field">
+                                <input id="settings-document" class="file-input" type="file" accept=".txt,text/plain"
+                                       aria-labelledby="settings-document-label">
+                                <label class="file-button" for="settings-document">Choose file</label>
+                                <span id="settings-document-name" class="file-name">No file selected &mdash; the current document is kept.</span>
+                            </div>
+                        </div>
+                    </div>
+                    <p id="settings-form-error" class="form-error hidden"></p>
+                    <div class="settings-actions">
+                        <button type="button" id="settings-cancel" class="btn btn-ghost">Cancel</button>
+                        <button type="submit" id="settings-save" class="btn btn-primary">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </aside>
+
     <div id="assistant-modal" class="modal-overlay hidden">
         <form id="assistant-form" class="modal">
             <h2 id="assistant-form-title">New assistant</h2>
@@ -53,9 +129,8 @@
             <textarea id="assistant-template" rows="8" required></textarea>
             <p class="hint">Must contain <code>{context}</code> and <code>{user_input}</code>. The full document is inserted into <code>{context}</code> on every single turn.</p>
             <label for="assistant-document">Document (.txt, UTF-8)</label>
-            <input id="assistant-document" type="file" accept=".txt,text/plain">
-            <p id="assistant-doc-info" class="hint hidden"></p>
-            <p id="assistant-form-error" class="form-error hidden"></p>
+                <input id="assistant-document" type="file" accept=".txt,text/plain">
+                <p id="assistant-form-error" class="form-error hidden"></p>
             <div class="modal-actions">
                 <button type="button" id="assistant-cancel">Cancel</button>
                 <button type="submit" id="assistant-save">Save</button>

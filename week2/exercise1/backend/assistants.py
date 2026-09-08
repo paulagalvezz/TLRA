@@ -21,6 +21,7 @@ MAX_DOC_BYTES = int(os.getenv("MAX_DOC_BYTES", str(100 * 1024)))
 
 PLACEHOLDERS = ("{context}", "{user_input}")
 _PLACEHOLDER_RE = re.compile(r"\{context\}|\{user_input\}")
+_NEWLINE_RE = re.compile(r"\r\n|\r")
 
 _lock = threading.Lock()
 
@@ -66,7 +67,11 @@ def _summary(record: dict) -> dict:
 
 
 def _validate_text_fields(name: str, system_prompt: str, prompt_template: str) -> tuple[str, str, str]:
-    name = name.strip()
+    # Browsers normalize textarea newlines to \r\n on form submission;
+    # store form text fields with plain \n (documents keep their bytes as-is).
+    name = _NEWLINE_RE.sub("\n", name).strip()
+    system_prompt = _NEWLINE_RE.sub("\n", system_prompt)
+    prompt_template = _NEWLINE_RE.sub("\n", prompt_template)
     if not name:
         raise HTTPException(status_code=422, detail="name must not be empty")
     if len(name) > 200:
