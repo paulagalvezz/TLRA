@@ -1,0 +1,12 @@
+# Keep the build context lean and avoid baking runtime/secret/local-venv state
+# into the image. collections-manager is NOT here on purpose — it is mounted at
+# runtime (see docker-compose.yml).
+.venv/
+data/
+.env
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+*.log

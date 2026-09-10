@@ -1,0 +1,52 @@
+# EASY-RAG — docker compose.
+#
+# The app talks to the embeddings DB only through `collections-manager`, which is
+# a PATH dependency declared in pyproject.toml as:
+#
+#     ../../../ludo-engsoft/week-02/collections-manager
+#
+# That path is RELATIVE TO THE PROJECT DIRECTORY. Inside the container the project
+# lives at /workspace/TLRA/week2/easy-rag, so ../../../ resolves to /workspace.
+# We therefore mount the host's course repo at /workspace/ludo-engsoft, and
+# `uv sync` (run by the entrypoint) finds collections-manager exactly as locally.
+#
+#   >>> If the course repo moves on the host, edit LUDO_ENGSOFT_PATH below (or in
+#   >>> .env / your shell). Default is $HOME/ludo-engsoft. The CONTAINER-side
+#   >>> target (/workspace/ludo-engsoft) must keep matching pyproject.toml's
+#   >>> relative path; if you change the WORKDIR layout in the Dockerfile, change
+#   >>> both together.
+
+services:
+  easy-rag:
+    build: .
+    image: easy-rag:latest
+    ports:
+      - "6664:8000"          # http://localhost:6664
+    env_file:
+      - .env                 # LLM_API_KEY / LLM_MODEL / EMBED_MODEL / RAG knobs (+ LLM_BASE_URL for host runs)
+    environment:
+      # OVERRIDE for the container: the host LAN/bridge IP in .env (e.g.
+      # 172.22.240.1) is usually NOT routable from inside a container. We reach
+      # Ollama on the docker host through host.docker.internal (see extra_hosts
+      # below). `environment` wins over `env_file`. If your Ollama lives
+      # elsewhere, set DOCKER_LLM_BASE_URL in your shell or .env.
+      LLM_BASE_URL: ${DOCKER_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+    volumes:
+      # Course repo -> provides collections-manager for the path dependency (RUNTIME).
+      - ${LUDO_ENGSOFT_PATH:-${HOME}/ludo-engsoft}:/workspace/ludo-engsoft
+      # Persist assistant JSON, the collections, and uploaded docs (/static) here.
+      - easyrag_data:/workspace/TLRA/week2/easy-rag/data
+      # Persist uv's cache + the venv so restarts skip re-downloading/re-building.
+      - easyrag_uvcache:/root/.cache/uv
+      - easyrag_venv:/workspace/TLRA/week2/easy-rag/.venv
+    extra_hosts:
+      # Lets the container reach an Ollama on the docker host via host.docker.internal.
+      # If your LLM_BASE_URL uses a host LAN/bridge IP (e.g. 172.22.240.1) and the
+      # container can't reach it, set LLM_BASE_URL=http://host.docker.internal:11434/v1.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  easyrag_data:
+  easyrag_uvcache:
+  easyrag_venv:

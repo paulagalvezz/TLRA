@@ -1,0 +1,20 @@
+[project]
+name = "easy-rag"
+version = "0.1.0"
+description = "EASY-RAG: a dynamic RAG web app — create assistants, upload documents, chat with grounded answers. Built on the course's collections-manager abstraction layer."
+requires-python = ">=3.10"
+dependencies = [
+    # The whole point: talk to the embeddings DB ONLY through this layer, never to ChromaDB directly.
+    "collections-manager",
+    # [pdf,docx,pptx] = the document converters we need (html/txt/md work in base).
+    "markitdown[pdf,docx,pptx]==0.1.6",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "openai>=1.40",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.9",
+]
+
+# Path dependency, exactly like simple-dynamic-rag does it (adjust the relative path).
+[tool.uv.sources]
+collections-manager = { path = "../../../ludo-engsoft/week-02/collections-manager", editable = true }

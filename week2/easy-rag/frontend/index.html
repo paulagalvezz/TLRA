@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EASY-RAG</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="layout">
+        <aside class="assistants-pane">
+            <div class="assistants-header">
+                <h2>Assistants</h2>
+                <button id="new-assistant" type="button" title="New assistant" aria-label="New assistant">+</button>
+            </div>
+            <div id="assistants-list" class="assistants-list"></div>
+        </aside>
+
+        <main class="chat-pane">
+            <header class="chat-header">
+                <h1><span id="chat-title">EASY-RAG</span> <span class="version">dynamic RAG</span></h1>
+                <div class="header-actions">
+                    <button id="upload-document" type="button" disabled>Upload document</button>
+                    <button id="context-toggle" type="button">Context view</button>
+                </div>
+            </header>
+
+            <div id="doc-bar" class="doc-bar">
+                <span id="doc-status" class="doc-status">No assistant selected</span>
+                <div id="doc-list" class="doc-list"></div>
+            </div>
+
+            <div id="messages" class="messages">
+                <div id="empty-state" class="empty-state">
+                    Create an assistant with <code>+</code>, select it, upload a document,<br>
+                    then ask questions &mdash; answers are grounded in what the collection retrieves.
+                </div>
+            </div>
+
+            <div class="composer">
+                <form id="chat-form" class="input-bar">
+                    <textarea id="user-input" placeholder="Select an assistant to start chatting..." rows="1" disabled></textarea>
+                    <button type="submit" id="send-button" disabled>Send</button>
+                </form>
+            </div>
+        </main>
+
+        <aside id="context-pane" class="context-pane hidden">
+            <h2>Context view</h2>
+            <div id="context-entries" class="context-entries"></div>
+        </aside>
+    </div>
+
+    <input type="file" id="document-input" accept=".txt,.md,text/plain,text/markdown" hidden>
+
+    <div id="assistant-modal" class="modal-overlay hidden">
+        <form id="assistant-form" class="modal">
+            <h2 id="assistant-form-title">New assistant</h2>
+            <label for="assistant-name">Name</label>
+            <input id="assistant-name" type="text" maxlength="200" required>
+            <label for="assistant-system">System prompt</label>
+            <textarea id="assistant-system" rows="3"></textarea>
+            <label for="assistant-template">Prompt template</label>
+            <textarea id="assistant-template" rows="8" required></textarea>
+            <p class="hint">
+                Must contain <code>{context}</code> and <code>{user_input}</code>.
+                On every turn the chunks retrieved from the assistant's collection
+                are inserted into <code>{context}</code>.
+            </p>
+            <p id="assistant-form-error" class="form-error hidden"></p>
+            <div class="modal-actions">
+                <button type="button" id="assistant-cancel">Cancel</button>
+                <button type="submit" id="assistant-save">Save</button>
+            </div>
+        </form>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
