@@ -97,20 +97,26 @@ def insert_chunks(
     return {"chunks": len(chunks), "inserted": inserted, "errors": errors, "total": col.count()}
 
 
-def retrieve(assistant_id: str, query_text: str) -> list[dict]:
-    """The nearest chunks to `query_text`, filtered by the configured threshold.
+def retrieve(assistant_id: str, query_text: str, *, top_k: int, threshold: float | None) -> list[dict]:
+    """The nearest chunks to `query_text`, filtered by `threshold`.
 
-    `retrieval_top_k` and `similarity_threshold` come from config (not constants).
+    `top_k` and `threshold` are passed in by the caller (config defaults, or a
+    per-assistant runtime override). `threshold=None` disables filtering.
     collections_manager.query() drops anything below the threshold, so an empty
     result means "nothing relevant enough" — the caller then refuses honestly.
     """
     col = get_collection(assistant_id)
-    return query(
-        col,
-        query_text,
-        top_k=_settings.retrieval_top_k,
-        threshold=_settings.similarity_threshold,
-    )
+    return query(col, query_text, top_k=top_k, threshold=threshold)
+
+
+def forget_collection(assistant_id: str) -> None:
+    """Drop the cached handle for an assistant.
+
+    The underlying Chroma collection is NOT deleted — collections_manager exposes
+    no delete, and we never touch ChromaDB directly. See delete_assistant (it logs
+    the orphaned collection as a known limitation).
+    """
+    _collections.pop(collection_name(assistant_id), None)
 
 
 def _score(hit: dict) -> float | None:

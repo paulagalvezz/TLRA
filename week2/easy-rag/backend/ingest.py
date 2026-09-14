@@ -30,6 +30,26 @@ def _docs_dir() -> Path:
     return directory
 
 
+def remove_stored_files(*urls: str | None) -> int:
+    """Delete stored files (original + distillation) given their /static URLs.
+
+    Used on assistant deletion. Returns the number of files removed. Best-effort:
+    a missing file is not an error.
+    """
+    docs = _settings.static_dir / _DOCS_SUBDIR
+    removed = 0
+    for url in urls:
+        if not url:
+            continue
+        path = docs / url.rsplit("/", 1)[-1]
+        try:
+            path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def ingest_upload(assistant_id: str, filename: str, raw: bytes) -> dict:
     """Store + convert + chunk + insert ONE uploaded document.
 

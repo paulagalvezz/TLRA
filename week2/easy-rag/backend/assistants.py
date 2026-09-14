@@ -11,7 +11,9 @@ fill_template / validation helpers) and grows it into dynamic RAG:
 This module never touches collections_manager / ChromaDB — it goes through
 rag.py (the seam) and ingest.py (the pipeline).
 """
+import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -26,6 +28,7 @@ from . import config, ingest, rag
 from .llm import LLM_MODEL, sse, sse_response, stream_chat
 
 router = APIRouter(prefix="/api/assistants", tags=["assistants"])
+logger = logging.getLogger("easy-rag")
 
 _settings = config.settings
 DATA_FILE = _settings.assistants_file
@@ -36,6 +39,11 @@ _PLACEHOLDER_RE = re.compile(r"\{context\}|\{user_input\}")
 _NEWLINE_RE = re.compile(r"\r\n|\r")
 
 _lock = threading.Lock()
+
+# Per-assistant retrieval overrides set via in-chat /topk and /threshold commands.
+# In-memory only (not persisted); cleared on restart and on assistant deletion.
+_runtime_overrides: dict[str, dict] = {}
+
 
 
 # --- JSON persistence (reused from exercise1) ------------------------------
@@ -158,8 +166,21 @@ def delete_assistant(assistant_id: str) -> None:
             raise HTTPException(status_code=404, detail="Assistant not found")
         data["assistants"].remove(record)
         _save(data)
-    # NOTE: collections_manager exposes no delete, so the on-disk collection (and
-    # the document files under /static) are left orphaned. TODO: cleanup pass.
+    # Remove the stored originals + markdown distillations under /static.
+    removed = 0
+    for doc in record.get("documents", []):
+        removed += ingest.remove_stored_files(doc.get("doc_url"), doc.get("md_url"))
+    # Drop the cached handle and any in-memory runtime overrides.
+    rag.forget_collection(assistant_id)
+    _runtime_overrides.pop(assistant_id, None)
+    # collections_manager exposes no delete and we never touch ChromaDB directly,
+    # so the collection's vectors remain in storage — a known limitation. Log it.
+    logger.warning(
+        "Assistant %s deleted: removed %d static file(s); collection '%s' remains "
+        "orphaned in ChromaDB storage (collections-manager exposes no delete()).",
+        assistant_id, removed, record.get("collection"),
+    )
+
 
 
 # --- Upload / ingestion ------------------------------------------------------
@@ -180,6 +201,26 @@ async def upload_document(assistant_id: str, document: UploadFile = File()) -> d
         raise HTTPException(status_code=422, detail="document is empty")
     filename = document.filename or "document.txt"
 
+    # De-dup on content: re-uploading identical bytes for this assistant must NOT
+    # duplicate chunks. collections_manager exposes no delete, so we skip
+    # re-inserting rather than replace — for identical content the two are
+    # equivalent (the existing chunks already represent this exact document).
+    content_hash = hashlib.sha256(raw).hexdigest()
+    with _lock:
+        record = _find(_load(), assistant_id)
+        existing = next(
+            (d for d in (record.get("documents", []) if record else [])
+             if d.get("content_hash") == content_hash),
+            None,
+        )
+        if existing is not None:
+            return {
+                "document": existing,
+                "collection_total": sum(d.get("chunks", 0) for d in record.get("documents", [])),
+                "assistant": _summary(record),
+                "deduplicated": True,
+            }
+
     # markitdown conversion + chunking + insertion (blocking) off the event loop.
     result = await run_in_threadpool(ingest.ingest_upload, assistant_id, filename, raw)
     if not result.get("ok"):
@@ -195,6 +236,7 @@ async def upload_document(assistant_id: str, document: UploadFile = File()) -> d
         "chars": result["markdown_chars"],
         "chunks": result["inserted"],
         "chunking_strategy": result["chunking_strategy"],
+        "content_hash": content_hash,
         "ingested_at": result["ingested_at"],
     }
     with _lock:
@@ -208,7 +250,9 @@ async def upload_document(assistant_id: str, document: UploadFile = File()) -> d
         "document": doc_meta,
         "collection_total": result["collection_total"],
         "assistant": summary,
+        "deduplicated": False,
     }
+
 
 
 # --- Chat --------------------------------------------------------------------
@@ -217,23 +261,61 @@ class AssistantChatRequest(BaseModel):
     message: str = Field(min_length=1)
 
 
-async def _no_answer_stream(message: str):
-    """SSE reply used when retrieval finds nothing over the threshold.
+def _instant_events(text: str, note: str) -> list[str]:
+    """A one-shot SSE reply (single delta + done) that does NOT call the LLM.
 
-    We do NOT call the LLM and do NOT feed it weak/irrelevant chunks: the honest
-    "I don't know" is returned directly, with empty sources and zero usage.
+    Used for the honest no-hits answer and for /topk, /threshold confirmations:
+    empty sources, zero usage.
     """
-    yield sse({"type": "delta", "content": message})
-    yield sse({
-        "type": "done",
-        "payload_sent": {
-            "model": LLM_MODEL,
-            "messages": [],
-            "note": "no retrieved chunk met the similarity threshold; the LLM was not called",
-        },
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        "sources": [],
-    })
+    return [
+        sse({"type": "delta", "content": text}),
+        sse({
+            "type": "done",
+            "payload_sent": {"model": LLM_MODEL, "messages": [], "note": note},
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "sources": [],
+        }),
+    ]
+
+
+def _apply_command(assistant_id: str, text: str) -> tuple[bool, str]:
+    """Handle in-chat runtime overrides. Returns (is_command, reply_text).
+
+      /topk <int>           set retrieval top-K for this assistant (in-memory)
+      /threshold <num|off>  set min similarity, or disable filtering (in-memory)
+
+    These change retrieval from this point on in the conversation; they are NOT
+    treated as a query and never reach the LLM.
+    """
+    parts = text.split()
+    if not parts:
+        return False, ""
+    cmd = parts[0].lower()
+    if cmd == "/topk":
+        if len(parts) != 2:
+            return True, "usage: /topk <positive integer>"
+        try:
+            k = int(parts[1])
+            if k <= 0:
+                raise ValueError
+        except ValueError:
+            return True, "usage: /topk <positive integer>"
+        _runtime_overrides.setdefault(assistant_id, {})["top_k"] = k
+        return True, f"top_k set to {k}"
+    if cmd == "/threshold":
+        if len(parts) != 2:
+            return True, "usage: /threshold <number 0..1> | off"
+        arg = parts[1].lower()
+        if arg in ("off", "none"):
+            _runtime_overrides.setdefault(assistant_id, {})["threshold"] = None
+            return True, "similarity threshold disabled"
+        try:
+            t = float(arg)
+        except ValueError:
+            return True, "usage: /threshold <number 0..1> | off"
+        _runtime_overrides.setdefault(assistant_id, {})["threshold"] = t
+        return True, f"similarity threshold set to {t}"
+    return False, ""
 
 
 @router.post("/{assistant_id}/chat/stream")
@@ -243,15 +325,33 @@ async def chat_with_assistant(assistant_id: str, request: AssistantChatRequest):
     if record is None:
         raise HTTPException(status_code=404, detail="Assistant not found")
 
-    # Dynamic augmentation: the user message IS the query into the collection,
-    # gated by top_k + similarity threshold (both from config).
-    hits = await run_in_threadpool(rag.retrieve, assistant_id, request.message)
+    text = request.message.strip()
+
+    # In-chat runtime override commands are handled locally (not sent to the LLM).
+    is_command, reply = _apply_command(assistant_id, text)
+    if is_command:
+        return sse_response(
+            _instant_events(reply, "runtime override command; the LLM was not called")
+        )
+
+    # Effective retrieval knobs: per-assistant override, else the config default.
+    override = _runtime_overrides.get(assistant_id, {})
+    top_k = override.get("top_k", _settings.retrieval_top_k)
+    threshold = override.get("threshold", _settings.similarity_threshold)
+
+    # Dynamic augmentation: the user message IS the query into the collection.
+    hits = await run_in_threadpool(
+        rag.retrieve, assistant_id, text, top_k=top_k, threshold=threshold
+    )
     if not hits:
-        return sse_response(_no_answer_stream(_settings.no_hits_message))
+        return sse_response(_instant_events(
+            _settings.no_hits_message,
+            "no retrieved chunk met the similarity threshold; the LLM was not called",
+        ))
 
     context = rag.format_context(hits)
     sources = rag.build_sources(hits)
-    filled = fill_template(record["prompt_template"], context, request.message)
+    filled = fill_template(record["prompt_template"], context, text)
     payload = {
         "model": LLM_MODEL,
         "messages": [
@@ -259,5 +359,6 @@ async def chat_with_assistant(assistant_id: str, request: AssistantChatRequest):
             {"role": "user", "content": filled},
         ],
     }
-    # Sources ride along in the final `done` event (requirement: provenance + usage).
+    # Sources ride along in the final `done` event (provenance + usage).
     return sse_response(stream_chat(payload, done_extra={"sources": sources}))
+
