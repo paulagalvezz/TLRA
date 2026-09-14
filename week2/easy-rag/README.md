@@ -109,38 +109,6 @@ Two Docker-specific notes:
   volumes make subsequent starts fast. `easyrag_data` persists assistants,
   collections and uploads across restarts.
 
-## Manual end-to-end test
-
-With the app running (`BASE=http://127.0.0.1:8123`, or `:6664` under Docker):
-
-```bash
-# 1) Create an assistant — also creates its collection.
-curl -s -X POST $BASE/api/assistants \
-  -F name='Acme Field Bot' \
-  -F system_prompt='Use only the information in the context below to answer. If it is not there, say you do not know.' \
-  -F prompt_template='Answer the question using only the context below.
-
-Context:
-{context}
-
-Question: {user_input}'
-# -> {"id":"<AID>","collection":"assistant_<AID>","document_count":0,"chunk_count":0,...}
-
-# 2) Upload a document (pdf/docx/pptx/html/txt/md). It is converted, stored under
-#    /static, chunked by paragraphs, and inserted.
-curl -s -X POST $BASE/api/assistants/<AID>/documents -F document=@handbook.md
-# -> {"document":{"chunks":6,"doc_url":"/static/docs/<id>.md","md_url":"/static/docs/<id>.distilled.md",...},...}
-
-# 3) Ask a question — streams SSE; the final `done` event carries sources + usage.
-curl -sN -X POST $BASE/api/assistants/<AID>/chat/stream \
-  -H 'Content-Type: application/json' -d '{"message":"How fast is the Pallet Pup?"}'
-
-# 4) Open a cited source (the ORIGINAL document) under /static:
-curl -sI $BASE/static/docs/<id>.pdf
-```
-
-In the browser, open **Context view** (top right) to see the filled prompt (with the
-retrieved chunks inside `{context}`), the sources, and token usage per turn.
 
 ## API
 
@@ -155,91 +123,11 @@ All assistant routes are under `/api/assistants`.
 | `POST` | `/api/assistants/{id}/documents` | Upload → convert → chunk → insert (de-dups identical content) |
 | `POST` | `/api/assistants/{id}/chat/stream` | Grounded, streaming answer (SSE); also takes `/topk`, `/threshold` |
 
-### `POST /api/assistants` — `multipart/form-data`
-Fields: `name`, `system_prompt`, `prompt_template` (must contain `{context}` and
-`{user_input}`). → `201` with the assistant **summary**:
-```json
-{"id":"...","name":"...","collection":"assistant_...","document_count":0,"chunk_count":0,"created_at":"..."}
-```
-
-### `POST /api/assistants/{id}/documents` — `multipart/form-data`
-Field: `document` (file). Re-uploading **identical content** (same SHA-256) for an
-assistant is detected and skipped (`"deduplicated": true`), so chunks are never
-duplicated. → `201`:
-```json
-{
-  "document": {
-    "doc_id": "...", "name": "handbook.md", "title": "handbook",
-    "doc_url": "/static/docs/<id>.md", "md_url": "/static/docs/<id>.distilled.md",
-    "chars": 910, "chunks": 6,
-    "chunking_strategy": "paragraphs(per_chunk=1,heading<=2,max_chars=800)",
-    "content_hash": "<sha256>", "ingested_at": "2026-09-09T12:00:40+00:00"
-  },
-  "collection_total": 6,
-  "assistant": { "id": "...", "document_count": 1, "chunk_count": 6, ... },
-  "deduplicated": false
-}
-```
-Errors: `422` (empty / >`MAX_DOC_BYTES`), `502` (conversion or insertion failed).
-
-
-### `POST /api/assistants/{id}/chat/stream` — JSON `{"message": "..."}` → SSE
-Events:
-- `{"type":"delta","content":"..."}` — a piece of the answer (repeated)
-- `{"type":"done","payload_sent":{...},"usage":{...},"sources":[...]}` — final
-- `{"type":"error","detail":"..."}` — the LLM failed mid-stream
-
-`usage` = `{"prompt_tokens","completion_tokens","total_tokens"}`.
-Each `sources[]` item:
-```json
-{
-  "title": "handbook", "source": "<doc_id>",
-  "doc_url": "/static/docs/<id>.md", "md_url": "/static/docs/<id>.distilled.md",
-  "chunk_number": 1, "chunking_strategy": "paragraphs(...)",
-  "similarity": 0.8021, "snippet": "## Pallet Pup ..."
-}
-```
-When nothing passes the threshold, the LLM is **not** called: a single delta carries
-the honest "I don't know", `sources` is `[]`, `usage` is all zeros, and
-`payload_sent.note` explains why.
-
-**In-chat runtime overrides** (per assistant, in-memory; reset on restart): sending
-`/topk <int>` or `/threshold <number|off>` as the message changes the retrieval
-top-K / similarity threshold from that point on, and returns a short confirmation
-(e.g. `top_k set to 5`) as a one-shot reply — it is **not** sent to the LLM. They
-override the config defaults for the rest of that assistant's conversation.
-
 
 ### Error codes
 `404` unknown assistant · `422` invalid input (template missing a placeholder, empty
 or oversized upload) · `502` conversion/insertion or LLM failure.
 
-## Configuration (`backend/config.py`)
-
-One file, env-overridable (see `.env.example`). No magic numbers in the logic.
-
-| Key | Env var | Default | Meaning |
-|---|---|---|---|
-| `embed_model` | `EMBED_MODEL` | `nomic-embed-text` | Embeddings model (must match across insert & query) |
-| `collection_metric` | `COLLECTION_METRIC` | `cosine` | `cosine` (higher=closer) or `euclidean` |
-| `collection_persist_path` | `COLLECTION_PERSIST_PATH` | `data/collections-store` | Where collections live on disk |
-| `assistants_file` | `ASSISTANTS_FILE` | `data/assistants.json` | Week-1 JSON persistence |
-| `static_dir` | `STATIC_DIR` | `data/static` | On-disk dir served at `static_url_prefix` |
-| `static_url_prefix` | `STATIC_URL_PREFIX` | `/static` | URL prefix for stored originals + `.md` |
-| `max_doc_bytes` | `MAX_DOC_BYTES` | `102400` | Upload size cap |
-| `chunk_strategy` | `CHUNK_STRATEGY` | `paragraphs` | Selector key (see `chunking._CHUNKERS`) |
-| `paragraphs_per_chunk` | `PARAGRAPHS_PER_CHUNK` | `1` | Paragraphs grouped into one chunk |
-| `chunk_size_chars` | `CHUNK_SIZE_CHARS` | `800` | Soft max chunk size (a paragraph is never cut) |
-| `chunk_overlap_chars` | `CHUNK_OVERLAP_CHARS` | `100` | Reserved for future char-window strategies |
-| `heading_level` | `HEADING_LEVEL` | `2` | Headings at level ≤ this delimit a chunk |
-| `retrieval_top_k` | `RETRIEVAL_TOP_K` | `4` | Nearest chunks pulled per turn |
-| `similarity_threshold` | `SIMILARITY_THRESHOLD` | `0.5` | Min cosine similarity; empty = off |
-| `no_hits_message` | `NO_HITS_MESSAGE` | (honest "I don't know") | Reply when nothing passes the threshold |
-
-Chat-model config (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`) is reused from
-exercise1 and read in `backend/llm.py`. `similarity_threshold=0.5` is a starting
-point for `nomic-embed-text` (relevant ≈0.50–0.70, unrelated ≈0.40–0.50); calibrate
-to your model/corpus.
 
 ## Project layout
 
@@ -267,42 +155,7 @@ data/ (runtime, gitignored)
   static/docs/           uploaded originals + their .md distillations (served at /static)
 ```
 
-## How it flows (ingestion & retrieval)
 
-```
-INGESTION — POST /api/assistants/{id}/documents   (multipart file)
-  upload bytes
-    └─ sha256(raw) already in this assistant's documents[]?
-         ├─ yes ─► SKIP, return existing doc meta  {"deduplicated": true}
-         └─ no  ─► ingest.py
-              1. store original      → data/static/docs/<doc_id><ext>   (served at /static)
-              2. markitdown.convert  → markdown (+ title)          [pdf/docx/pptx/html/txt/md]
-              3. store distillation  → data/static/docs/<doc_id>.md
-              4. chunking.chunk_document(markdown, settings)
-                   paragraph chunks; cut at headings ≤ heading_level; group
-                   paragraphs_per_chunk; soft cap chunk_size_chars (never splits a paragraph)
-              5. rag.insert_chunks → collections_manager.insert(chunk, metadata) per chunk
-                   metadata: source, title, doc_url, md_url,
-                             chunk_number, chunking_strategy, ingested_at
-    └─ append doc meta (incl. content_hash) to data/assistants.json
-
-RETRIEVAL — POST /api/assistants/{id}/chat/stream   {"message": "..."}
-  message
-    └─ starts with /topk or /threshold ?
-         ├─ yes ─► update in-memory override for this assistant,
-         │         reply one-shot confirmation ("top_k set to 5"), NO LLM call
-         └─ no  ─► effective top_k + threshold = (override else config default)
-              1. rag.retrieve → collections_manager.query(top_k, threshold)
-              2. zero hits ?
-                   ├─ yes ─► honest "I don't know", sources [], usage 0, NO LLM call
-                   └─ no  ─► rag.format_context (chunks + provenance) → fill {context}/{user_input}
-              3. llm.stream_chat → SSE delta… → done{payload_sent, usage, sources[]}
-                   sources[] = {title, doc_url (/static), md_url, chunk_number, similarity, snippet}
-
-DELETE — DELETE /api/assistants/{id}
-  remove record  +  ingest.remove_stored_files(doc_url, md_url)  → /static files gone
-  collections_manager has no delete() → Chroma collection left orphaned (logged as a warning)
-```
 
 ## Example (real output)
 
@@ -327,18 +180,6 @@ ANSWER: I don't know — none of the uploaded documents contain information rele
 USAGE : {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 SOURCES: (none)   payload_sent.note: "no retrieved chunk met the similarity threshold; the LLM was not called"
 ```
-
-## Known limitations / deferred
-
-- **Deletion leaves the collection orphaned.** Deleting an assistant removes its
-  record and its `/static` files (original + markdown distillation), but
-  `collections-manager` exposes no `delete()`, so the collection's vectors **remain
-  in ChromaDB storage** under `data/collections-store/`. We do **not** touch ChromaDB
-  directly to work around this; the deletion logs a warning naming the orphaned
-  collection. (A real fix belongs in the abstraction layer, not the app.)
-- **Char-window / overlap strategy** — `chunk_overlap_chars` is reserved for a future
-  `chunk_by_chars` strategy (add it to `chunking._CHUNKERS`). Deferred.
-- **OCR for scanned PDFs** — image-only PDFs need an OCR model, not markitdown. Deferred.
 
 
 ## Credits
